@@ -1,0 +1,138 @@
+# Created by Mykola Raryk
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates an S3 bucket configured for hosting a static website, and a Route
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: S3 butcket
+        Parameters:
+          - BucketName
+      - Label:
+          default: Cloudfront
+        Parameters:
+          - SSLcert
+      - Label:
+          default: Route53
+        Parameters:
+          - HostedDNSName
+    ParameterLabels:
+      BucketName:
+        default: Bucket Name
+      Cloudfront:
+        default: SSL cert
+      Route53:
+        default: route 53
+Parameters:
+  BucketName:
+    AllowedPattern: '[a-zA-Z0-9\-]+\..+'
+    Default: hello.example.com
+    Description: The DNS name of bucket
+    MaxLength: '255'
+    MinLength: '2'
+    Type: String
+  SSLcert:
+    Default: arn:aws:acm:us-east-1:
+    Description: the Amazon Resource Name (ARN) of an AWS Certificate Manager (ACM) certificate.
+    Type: String
+    AllowedPattern: "arn:aws:acm:.*"
+  HostedDNSName:
+    AllowedPattern: '[a-zA-Z0-9\-]+\..+'
+    Default: example.com
+    Description: The DNS name of an existing Amazon Route 53 hosted zone
+    Type: String
+
+
+Resources:
+  # S3 Bucket
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref 'BucketName'
+#      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
+#        ErrorDocument: error.html
+    DeletionPolicy: Retain # Don't remove s3 bukcet
+
+  # S3 Bucket Policy
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref 'WebsiteBucket'
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref 'WebsiteBucket'
+                - /*
+# Cloudfornt
+  # CloudFrontOriginAccessIdentity: #Origin access identity
+  #   Type: 'AWS::CloudFront::CloudFrontOriginAccessIdentity'
+  #   Properties:
+  #     CloudFrontOriginAccessIdentityConfig:
+  #       Comment: !Ref BucketName
+
+
+  WebsiteCloudfront:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+      - WebsiteBucket
+    Properties:
+      DistributionConfig:
+        Comment: Cloudfront Distribution pointing to S3 bucket
+        Origins:
+        - DomainName: !Join
+            - "."
+            - - !Ref 'BucketName'
+              - 's3.amazonaws.com'
+          Id: !Join
+            - "-"
+            - - 'S3'
+              - !Ref 'BucketName'
+          CustomOriginConfig:  #https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/quickref-cloudfront.html#scenario-cloudfront-customorigin
+            HTTPPort: '80'
+            HTTPSPort: '443'
+            OriginProtocolPolicy: http-only
+          # S3OriginConfig:
+          #   OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}'
+        Enabled: 'true'
+        HttpVersion: 'http2'
+        DefaultRootObject: index.html
+        Aliases:
+          - !Ref 'BucketName'
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+          TargetOriginId: !Join
+            - "-"
+            - - 'S3'
+              - !Ref 'BucketName'
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        PriceClass: PriceClass_All
+        ViewerCertificate:
+          AcmCertificateArn: !Ref 'SSLcert'
+          SslSupportMethod: sni-only
+
+
+# Route 53
+  WebsiteDNSName:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Join ['', [!Ref 'HostedDNSName', .]]
+      RecordSets:
+      - Name: !Ref 'BucketName'
+        Type: A
+        AliasTarget:
+          HostedZoneId: Z2FDTNDATAQYW2 # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget-1.html
+          DNSName: !GetAtt [WebsiteCloudfront, DomainName]
